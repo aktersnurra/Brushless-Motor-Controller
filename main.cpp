@@ -75,6 +75,9 @@ uint32_t last_time;
 // number of increments (of the 117) have been passed since last time measurement
 uint8_t increments;
 
+// current rotor position
+float rotor_position;
+
 // current motor speed in Hz
 float measured_speed;
 
@@ -120,9 +123,15 @@ int8_t motorHome()
 
 void photointerrupt_ISR(void)
 {
-    int8_t intState = 0;
+    int8_t intState;
     intState = readRotorState();
     motorOut((intState-orState+lead+6)%6); // +6 to make sure the remainder is positive
+    
+    // reset rotor position
+    if (intState == 0)
+    {
+        rotor_position = 0.0f;
+    }
 }
 
 void incremental_ISR(void)
@@ -132,16 +141,27 @@ void incremental_ISR(void)
     if (state == 0)
     {
         increments++;
+        rotor_position = rotor_position + 3.07692;
         if (last_time > 0);
         {
             current_time = speedTimer.read_us();
-            measured_speed = increments*8547/(current_time-last_time);
+            measured_speed = increments*8547.0f/(current_time-last_time);
             increments = 0;
         }
         last_time = current_time;
     }
 }
 
+void set_PWM_period_us(int period_us)
+{
+    L1L.period_us(period_us);
+    L1H.period_us(period_us);
+    L2L.period_us(period_us);
+    L2H.period_us(period_us);
+    L3L.period_us(period_us);
+    L3H.period_us(period_us);
+}
+    
 void setup(void)
 {
     // Run the motor synchronisation
@@ -162,12 +182,12 @@ void setup(void)
     CHB.fall(incremental_ISR);
     
     // Set up PWM outputs
-    L1L.period_us(50);
-    L1H.period_us(50);
-    L2L.period_us(50);
-    L2H.period_us(50);
-    L3L.period_us(50);
-    L3H.period_us(50);
+    L1L.period_us(100);
+    L1H.period_us(100);
+    L2L.period_us(100);
+    L2H.period_us(100);
+    L3L.period_us(100);
+    L3H.period_us(100);
     
     // Set initial motor speed
     motor_speed = 0.5f;
@@ -177,6 +197,7 @@ void setup(void)
     last_time = 0;
     
     increments = 0;
+    rotor_position = 0.0f;
 }
 
 int main(void)
@@ -188,5 +209,6 @@ int main(void)
     {
         wait(1);
         pc.printf("Rotor speed: %f\n\r",measured_speed);
+        pc.printf("Rotor position: %f\n\r",rotor_position);
     }
 }
