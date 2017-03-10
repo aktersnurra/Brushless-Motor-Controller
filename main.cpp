@@ -1,5 +1,7 @@
 #include "mbed.h"
 #include "rtos.h"
+#include "BufferedSerial.h"
+#include "interpreteRegex.h"
 
 // Photointerrupter input pins
 #define I1pin D2
@@ -80,6 +82,10 @@ float rotor_position;
 
 // current motor speed in Hz
 float measured_speed;
+
+// Initialise the serial port
+//Serial pc(SERIAL_TX, SERIAL_RX, 115200);
+BufferedSerial pc(USBTX, USBRX);
 
 // Set a given drive state
 void motorOut(int8_t driveState)
@@ -200,15 +206,71 @@ void setup(void)
     rotor_position = 0.0f;
 }
 
+float* freqPtr;
+int* durationPtr;
+
+void playTune(int toneSum)
+{
+    for (int i = 0; i < toneSum; i++)
+    {
+        printf("play %f Hz for %d us.\n", freqPtr[i], durationPtr[i]*100);
+        set_PWM_period_us(1000000/freqPtr[i]);
+        wait_ms(durationPtr[i]*150);
+        set_PWM_period_us(50);
+    }   
+}
+
+void readRegex()
+{
+    char regex[64];
+    //char regex[64];
+    int i = 0;
+    char c;
+    
+    float revFloat = 0;
+    float velFloat = 0;
+    int toneSum = 0;
+
+    if (pc.readable())
+    {
+        while (pc.readable())
+        {
+            c = pc.getc();
+            //               pc.putc(c+1);    //debug
+            regex[i] = c;
+            i++;
+        }
+        regex[i] = '\0';
+        printf("\nRegex=%s, ", regex);
+        interpreteRegex(regex, i);
+        
+        if(getMotorCommands(&revFloat, &velFloat))
+        {
+            printf("TODO: execute motor command, rev=%f, vel=%f\n", revFloat, velFloat);
+        }else{
+            toneSum = getTune(&freqPtr, &durationPtr);
+            if (toneSum){
+                playTune(toneSum);   
+            }
+        }   
+        
+        
+        
+        i = 0;
+    }    
+}
+
 int main(void)
 {
     setup();
-    // Initialise the serial port
-    Serial pc(SERIAL_TX, SERIAL_RX);
+
+    pc.baud(115200);
+    
     while(1)
     {
         wait(1);
-        pc.printf("Rotor speed: %f\n\r",measured_speed);
-        pc.printf("Rotor position: %f\n\r",rotor_position);
+        printf("Rotor speed: %f\n\r",measured_speed);
+        printf("Rotor position: %f\n\r",rotor_position);
+        readRegex();
     }
 }

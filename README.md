@@ -1,5 +1,5 @@
 # Brushless-Motor-Controller
 Embedded Systems Coursework 2
 
-regex library that might help:
-https://developer.mbed.org/users/andrewbonney/code/regex/docs/tip/
+Library for buffered serial communication:
+https://developer.mbed.org/users/sam_grove/code/BufferedSerial/
