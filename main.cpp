@@ -197,7 +197,7 @@ void incremental_ISR(void)
 
         // measure the speed based on the number of increments and time since the last speed measurement
         current_time = speedTimer.read_us();
-        if (!timer_reset_fine);
+        if (!timer_reset_fine)
         {
             measured_speed_fine = increments*8547.0f/(current_time-last_time_fine);
             // reset increments
