@@ -72,7 +72,8 @@ PwmOut L3H(L3Hpin);
 Timer speedTimer;
 
 // last time the timer was read
-uint32_t last_time;
+uint32_t last_time_fine;
+uint32_t last_time_coarse;
 
 // number of increments (of the 117) have been passed since last time measurement
 uint8_t increments;
@@ -81,7 +82,8 @@ uint8_t increments;
 float rotor_position;
 
 // current motor speed in Hz
-float measured_speed;
+float measured_speed_fine;
+float measured_speed_coarse;
 
 // Initialise the serial port
 //Serial pc(SERIAL_TX, SERIAL_RX, 115200);
@@ -130,6 +132,7 @@ int8_t motorHome()
 void photointerrupt_ISR(void)
 {
     int8_t intState;
+    uint32_t current_time;
     intState = readRotorState();
     motorOut((intState-orState+lead+6)%6); // +6 to make sure the remainder is positive
     
@@ -137,6 +140,11 @@ void photointerrupt_ISR(void)
     if (intState == 0)
     {
         rotor_position = 0.0f;
+        if (last_time_coarse > 0)
+        {
+        	current_time = speedTimer.read_us();
+        	measured_speed_coarse = 1000000/((current_time - last_time_coarse));
+        }
     }
 }
 
@@ -148,13 +156,13 @@ void incremental_ISR(void)
     {
         increments++;
         rotor_position = rotor_position + 3.07692;
-        if (last_time > 0);
+        if (last_time_fine > 0);
         {
             current_time = speedTimer.read_us();
-            measured_speed = increments*8547.0f/(current_time-last_time);
+            measured_speed_fine = increments*8547.0f/(current_time-last_time_fine);
             increments = 0;
         }
-        last_time = current_time;
+        last_time_fine = current_time;
     }
 }
 
@@ -200,7 +208,7 @@ void setup(void)
     
     // Start timer
     speedTimer.start();
-    last_time = 0;
+    last_time_fine = 0;
     
     increments = 0;
     rotor_position = 0.0f;
@@ -269,7 +277,7 @@ int main(void)
     while(1)
     {
         wait(1);
-        printf("Rotor speed: %f\n\r",measured_speed);
+        printf("Rotor speed: %f\n\r",measured_speed_fine);
         printf("Rotor position: %f\n\r",rotor_position);
         readRegex();
     }
