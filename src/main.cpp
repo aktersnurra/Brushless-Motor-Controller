@@ -45,6 +45,10 @@ const int8_t stateMap[] = {0x07,0x05,0x03,0x04,0x01,0x00,0x02,0x07};
 // Phase lead to make motor spin
 const int8_t lead = -2;  //2 for forwards, -2 for backwards
 
+extern float revFloat;
+extern float velFloat;
+float Ierror = 0;
+
 // motor speed
 float motor_speed = 0;
 
@@ -263,23 +267,41 @@ void setup(void)
 
 //Controller
 void controller(float refRev, float refVel) {
-    float K = 1;
-    float Ki = 1;
-    float Kp = 1;
-    float Kd = 1;
-    float dTarget = 0;
-    float sTarget = 0;
+    float K = 0.1, Kp = 0.1, Ki = 0.1, Kd = 0.3;
+    float error = 0, Derror;
+    float P = 0, I = 0, D = 0;
+    int pwmL = 0, pwmU = 1;
 
-    if(refRev != 0) {
-        dTarget = refRev - total_distance;
+
+    //Proportional Part
+    if(refRev) {
+        error = (refRev * 360) - total_distance;
+        printf("total distance: %f\n",total_distance);
+        printf("error: %f\n",error);
+        P = Kp * error;
     }
 
-    if(refVel != 0) {
-        sTarget = refVel - measured_speed;
-    }
+    //Integral Part
+    Ierror += error;
+    I = Ki * Ierror;
 
-    motor_speed = K * (Kp * dTarget + Kd * sTarget);
+    //Derivative Part
+    Derror = measured_speed_fine;
+    D = Kd * Derror;
+
+    float pid = K * P * I * D;
+    printf("PID: %f\n", pid);
+    if(pid > pwmL && pid < pwmU) {
+        motor_speed = pid;
+    } else if(pid < pwmL) {
+        motor_speed = 0;
+    } else if(pid > pwmU) {
+        motor_speed = 1;
+    }
+    printf("Control out: %f\n", motor_speed);
 }
+
+
 
 float* freqPtr;
 int* durationPtr;
@@ -302,8 +324,6 @@ void readRegex()
     int i = 0;
     char c;
 
-    float revFloat = 0;
-    float velFloat = 0;
     int toneSum = 0;
 
     if (pc.readable())
@@ -321,34 +341,32 @@ void readRegex()
 
         if(getMotorCommands(&revFloat, &velFloat))
         {
+            total_distance = 0;
+            Ierror = 0;
             printf("TODO: execute motor command, rev=%f, vel=%f\n", revFloat, velFloat);
-            controller(revFloat,velFloat);
         }else{
             toneSum = getTune(&freqPtr, &durationPtr);
             if (toneSum){
                 playTune(toneSum);
             }
         }
-
-
-
         i = 0;
     }
 }
+
 
 int main(void)
 {
     setup();
 
     pc.baud(115200);
-
     while(1)
     {
         wait(1);
-        printf("Rotor speed: %f\n\r",measured_speed_fine);
-        printf("Rotor position: %f\n\r",rotor_position);
+        printf("Rotor speed: %f\n",measured_speed_fine);
+        printf("Rotor position: %f\n",rotor_position);
         readRegex();
-
+        controller(revFloat,velFloat);
         // reset the timer every 20 minutes to prevent it from overflowing
         if (speedTimer.read_us() > 1200000000)
         {
