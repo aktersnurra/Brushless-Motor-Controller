@@ -12,7 +12,7 @@
 #define CHApin   D7
 #define CHBpin   D8  
 
-// Motor Drive output pins   //Mask in output byte
+// Motor Drive output pins  //Mask in output byte
 #define L1Lpin D4           //0x01
 #define L1Hpin D5           //0x02
 #define L2Lpin D3           //0x04
@@ -86,8 +86,18 @@ float measured_speed_fine;
 float measured_speed_coarse;
 
 // Initialise the serial port
-//Serial pc(SERIAL_TX, SERIAL_RX, 115200);
+// Serial pc(SERIAL_TX, SERIAL_RX, 115200);
 BufferedSerial pc(USBTX, USBRX);
+
+// bool to determine if the rotor has passed through the zero state yet
+bool passedHome = false;
+
+// float that holds how many degrees have been travelled in total
+float total_distance = 0;
+
+// bool to check if timer has been reset since last measurement
+bool timer_reset_fine;
+bool timer_reset_coarse;
 
 // Set a given drive state
 void motorOut(int8_t driveState)
@@ -136,33 +146,70 @@ void photointerrupt_ISR(void)
     intState = readRotorState();
     motorOut((intState-orState+lead+6)%6); // +6 to make sure the remainder is positive
     
-    // reset rotor position
+    // only do when state is zero because states are not evenly spaced through the rotation
     if (intState == 0)
     {
-        rotor_position = 0.0f;
-        if (last_time_coarse > 0)
+    	// calculate the speed based on the number of full revolutions
+    	current_time = speedTimer.read_us();
+        if (!timer_reset_coarse)
         {
-        	current_time = speedTimer.read_us();
         	measured_speed_coarse = 1000000/((current_time - last_time_coarse));
+        	last_time_coarse = current_time;
         }
+        else
+        {
+        	timer_reset_coarse = false;
+        	last_time_coarse = current_time;
+        }	
+
+        // update the total distance travelled
+        if (!passedHome)
+        {
+        	// if the rotor hasn't passed through the zero state yet, the rotor position is the 
+        	// distance from the initia state to the zero state and the total distance travelled so far
+        	total_distance += rotor_position;
+        }
+        else
+        {
+        	// if the rotor has passed through zero already then it has gone through a full revolution
+        	// and thus travelled 360 degrees
+        	total_distance += 360;
+        }
+
+        // reset rotor position measured by incremental encoder to eliminate errors due to slipping
+        rotor_position = 0.0f;
     }
 }
 
 void incremental_ISR(void)
 {
+	// assign arbitrary values to the 4 states of the incremental encoder
     uint8_t state = (CHA*2 + CHB);
     uint32_t current_time;
+
+    // only do when state is zero because states are not evenly spaced
     if (state == 0)
     {
+    	// update the number of increments since last speed measurement
         increments++;
+        // update rotor position (one increment corresponds to 360/117 degrees)
         rotor_position = rotor_position + 3.07692;
-        if (last_time_fine > 0);
+
+        // measure the speed based on the number of increments and time since the last speed measurement
+        current_time = speedTimer.read_us();
+        if (!timer_reset_fine);
         {
-            current_time = speedTimer.read_us();
             measured_speed_fine = increments*8547.0f/(current_time-last_time_fine);
+            // reset increments
             increments = 0;
+            // update last time speed was measured
+            last_time_fine = current_time;
         }
-        last_time_fine = current_time;
+        else
+        {
+        	timer_reset_fine = false;
+        	last_time_fine = current_time;
+        }
     }
 }
 
@@ -280,5 +327,13 @@ int main(void)
         printf("Rotor speed: %f\n\r",measured_speed_fine);
         printf("Rotor position: %f\n\r",rotor_position);
         readRegex();
+
+        // reset the timer every 20 minutes to prevent it from overflowing
+        if (speedTimer.read_us() > 1200000000)
+        {
+        	speedTimer.reset();
+        	timer_reset_fine = true;
+        	timer_reset_coarse = true;
+        }
     }
 }
