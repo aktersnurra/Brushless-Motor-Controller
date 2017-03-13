@@ -1,0 +1,3 @@
+/Users/aktersnurra/Documents/Embedded_Systems/Brushless-Motor-Controller/cmake-build-debug/CMakeFiles/edit_cache.dir
+/Users/aktersnurra/Documents/Embedded_Systems/Brushless-Motor-Controller/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/Users/aktersnurra/Documents/Embedded_Systems/Brushless-Motor-Controller/cmake-build-debug/CMakeFiles/Brushless_Motor_Controller.dir
