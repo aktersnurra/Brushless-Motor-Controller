@@ -97,8 +97,10 @@ BufferedSerial pc(USBTX, USBRX);
 // bool to determine if the rotor has passed through the zero state yet
 bool passedHome = false;
 
-// float that holds how many degrees have been travelled in total
-float total_distance = 0;
+// float that holds how many degrees have been travelled in total, uses incremental encoder until first zero crossing and photointerrupts after
+float total_distance_coarse = 0;
+// float that holds how many degrees have been travelled in total, uses incremental encoder only
+float total_distance_fine = 0;
 
 // bool to check if timer has been reset since last measurement
 bool timer_reset_fine;
@@ -172,13 +174,16 @@ void photointerrupt_ISR(void)
         {
             // if the rotor hasn't passed through the zero state yet, the rotor position is the
             // distance from the initia state to the zero state and the total distance travelled so far
-            total_distance += rotor_position;
+            total_distance_coarse += rotor_position;
         }
         else
         {
             // if the rotor has passed through zero already then it has gone through a full revolution
             // and thus travelled 360 degrees
-            total_distance += 360;
+            total_distance_coarse += 360;
+            // to prevent errors due to slippage in incremental encoder,
+            // set total_distance_fine equal to total_distance_coarse which does not sufer from slippage
+            total_distance_fine = total_distance_coarse;
         }
 
         // reset rotor position measured by incremental encoder to eliminate errors due to slipping
@@ -326,7 +331,7 @@ float positionController(float refRev) {
     float P = 0, I = 0, D = 0;
     int pwmL = 0, pwmU = 1;
 
-    error = (refRev * 360) - total_distance;
+    error = (refRev * 360) - total_distance_fine;
     P = Kp * error;
 
     IPosError += error;
