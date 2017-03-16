@@ -47,7 +47,6 @@ const int8_t lead = -2;  //2 for forwards, -2 for backwards
 
 extern float revFloat;
 extern float velFloat;
-float Ierror;
 
 Thread thread;
 
@@ -267,41 +266,86 @@ void setup(void)
     rotor_position = 0.0f;
 }
 
+
+float IVelError,IPosError;
+
 //Controller
 void controller(float refRev=0, float refVel=0) {
-    float K = 1, Kp = 90.3281, Ki = 85.2238, Kd = 3.7163 / 2;
-    float error = 0, Derror, pid;
+    float velPI = 0, posPID = 0;
+
+    if(refVel != 0) {
+        velPI = velocityController(refVel);
+    }
+
+    if(refRev != 0) {
+        posPID = positionController(refRev);
+    }
+
+    if(velPI != 0 && posPID != 0) {
+        if(velPI > posPID) {
+            motor_speed = posPID;
+        } else {
+            motor_speed = velPI;
+        }
+    } else if (velPI != 0) {
+        motor_speed = velPI;
+    } else {
+        motor_speed = posPID;
+    }
+
+}
+
+float velocityController(float refVel) {
+    float K = 1, Kp = 90.3281, Ki = 0.2238, Kd = 0.7163;
+    float error = 0, Derror=0, pi, velPI_out;
     float P = 0, I = 0, D = 0;
     int pwmL = 0, pwmU = 1;
 
+    error = refVel - measured_speed_fine;
+    P = Kp * error;
 
-    //Proportional Part
-    if(refRev != 0) {
-        error = (refRev * 360) - total_distance;
-        P = Kp * error;
+    IVelError += error;
+    I = Ki * IVelError;
+
+    pi = K * (P + I);
+
+    if(pid > pwmL && pid < pwmU) {
+        velPI_out = pid;
+    } else if(pid <= pwmL) {
+        velPI_out = pwmL;
+    } else if(pid >= pwmU) {
+        velPI_out = pwmU;
     }
 
-    //Integral Part
-    Ierror += error;
-    I = Ki * Ierror;
+    return velPI_out;
+}
 
-    if(refVel != 0) {
-        Derror = refVel - measured_speed_fine;
-    }
+float positionController(float refRev) {
+    float K = 1, Kp = 90.3281, Ki = 85.2238, Kd = 17.7163;
+    float error = 0, Derror=0, pid, posPID_out;
+    float P = 0, I = 0, D = 0;
+    int pwmL = 0, pwmU = 1;
 
-    //Derivative Part
+    error = (refRev * 360) - total_distance;
+    P = Kp * error;
+
+    IPosError += error;
+    I = Ki * IPosError;
+
+    Derror = measured_speed_fine;
     D = Kd * Derror;
 
     pid = K * (P + I + D);
     if(pid > pwmL && pid < pwmU) {
-        motor_speed = pid;
+        posPID_out = pid;
     } else if(pid <= pwmL) {
-        motor_speed = pwmL;
+        posPID_out = pwmL;
     } else if(pid >= pwmU) {
-        motor_speed = pwmU;
+        posPID_out = pwmU;
     }
-
+    return posPID_out;
 }
+
 
 
 
