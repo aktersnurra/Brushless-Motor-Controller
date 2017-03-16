@@ -47,7 +47,9 @@ const int8_t lead = -2;  //2 for forwards, -2 for backwards
 
 extern float revFloat;
 extern float velFloat;
-float Ierror = 0;
+float Ierror;
+
+Thread thread;
 
 // motor speed
 float motor_speed = 0;
@@ -266,18 +268,16 @@ void setup(void)
 }
 
 //Controller
-void controller(float refRev, float refVel) {
-    float K = 0.1, Kp = 0.1, Ki = 0.1, Kd = 0.3;
-    float error = 0, Derror;
+void controller(float refRev=0, float refVel=0) {
+    float K = 1, Kp = 90.3281, Ki = 85.2238, Kd = 3.7163 / 2;
+    float error = 0, Derror, pid;
     float P = 0, I = 0, D = 0;
     int pwmL = 0, pwmU = 1;
 
 
     //Proportional Part
-    if(refRev) {
+    if(refRev != 0) {
         error = (refRev * 360) - total_distance;
-        printf("total distance: %f\n",total_distance);
-        printf("error: %f\n",error);
         P = Kp * error;
     }
 
@@ -285,20 +285,22 @@ void controller(float refRev, float refVel) {
     Ierror += error;
     I = Ki * Ierror;
 
+    if(refVel != 0) {
+        Derror = refVel - measured_speed_fine;
+    }
+
     //Derivative Part
-    Derror = measured_speed_fine;
     D = Kd * Derror;
 
-    float pid = K * P * I * D;
-    printf("PID: %f\n", pid);
+    pid = K * (P + I + D);
     if(pid > pwmL && pid < pwmU) {
         motor_speed = pid;
-    } else if(pid < pwmL) {
-        motor_speed = 0;
-    } else if(pid > pwmU) {
-        motor_speed = 1;
+    } else if(pid <= pwmL) {
+        motor_speed = pwmL;
+    } else if(pid >= pwmU) {
+        motor_speed = pwmU;
     }
-    printf("Control out: %f\n", motor_speed);
+
 }
 
 
@@ -323,9 +325,7 @@ void readRegex()
     //char regex[64];
     int i = 0;
     char c;
-
     int toneSum = 0;
-
     if (pc.readable())
     {
         while (pc.readable())
@@ -354,19 +354,27 @@ void readRegex()
     }
 }
 
+void test_thread() {
+    printf("Rotor speed: %f\n",measured_speed_fine);
+    printf("Rotor position: %f\n",rotor_position);
+    printf("Control out: %f\n", motor_speed);
+    printf("total distance: %f\n", total_distance / 360);
+    wait(1);
+}
+
 
 int main(void)
 {
     setup();
-
     pc.baud(115200);
     while(1)
     {
-        wait(1);
-        printf("Rotor speed: %f\n",measured_speed_fine);
-        printf("Rotor position: %f\n",rotor_position);
         readRegex();
+        test_thread();
+
         controller(revFloat,velFloat);
+
+
         // reset the timer every 20 minutes to prevent it from overflowing
         if (speedTimer.read_us() > 1200000000)
         {
