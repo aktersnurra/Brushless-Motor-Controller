@@ -36,22 +36,25 @@ State   L1  L2  L3
 int8_t orState = 0;    // Rotot offset at motor state 0
 
 // Drive state to output table
-const int8_t driveTable[] = {0x12,0x18,0x09,0x21,0x24,0x06,0x00,0x00};
+const int8_t driveTable[] = {0x12, 0x18, 0x09, 0x21, 0x24, 0x06, 0x00, 0x00};
 
 // Mapping from interrupter inputs to sequential rotor states. 0x00 and 0x07 are not valid
-const int8_t stateMap[] = {0x07,0x05,0x03,0x04,0x01,0x00,0x02,0x07};
+const int8_t stateMap[] = {0x07, 0x05, 0x03, 0x04, 0x01, 0x00, 0x02, 0x07};
 // const int8_t stateMap[] = {0x07,0x01,0x03,0x02,0x05,0x00,0x04,0x07}; //Alternative if phase order of input or drive is reversed
 
 // Phase lead to make motor spin
 const int8_t lead = -2;  //2 for forwards, -2 for backwards
 
+//Init number revolutions that the user wants the motor to spin for
 extern float revFloat;
+//Init the velocity that the user wants the motor to spin at
 extern float velFloat;
 
+//Init Thread for threading :)
 Thread thread;
 
 // motor speed
-float motor_speed = 0;
+volatile float pwm_duty_cycle = 0;
 
 // Status LED
 DigitalOut led1(LED1);
@@ -77,67 +80,64 @@ PwmOut L3H(L3Hpin);
 Timer speedTimer;
 
 // last time the timer was read
-uint32_t last_time_fine;
-uint32_t last_time_coarse;
+volatile uint32_t last_time_fine;
+volatile uint32_t last_time_coarse;
 
 // number of increments (of the 117) have been passed since last time measurement
-uint8_t increments;
+volatile uint8_t increments;
 
 // current rotor position
-float rotor_position;
+volatile float rotor_position;
 
 // current motor speed in Hz
-float measured_speed_fine;
-float measured_speed_coarse;
+volatile float measured_speed_fine;
+volatile float measured_speed_coarse;
 
 // Initialise the serial port
 // Serial pc(SERIAL_TX, SERIAL_RX, 115200);
 BufferedSerial pc(USBTX, USBRX);
 
 // bool to determine if the rotor has passed through the zero state yet
-bool passedHome = false;
+volatile bool passedHome = false;
 
 // float that holds how many degrees have been travelled in total, uses incremental encoder until first zero crossing and photointerrupts after
-float total_distance_coarse = 0;
+volatile float total_distance_coarse = 0;
 // float that holds how many degrees have been travelled in total, uses incremental encoder only
-float total_distance_fine = 0;
+volatile float total_distance_fine = 0;
 
 // bool to check if timer has been reset since last measurement
-bool timer_reset_fine;
-bool timer_reset_coarse;
+volatile bool timer_reset_fine;
+volatile bool timer_reset_coarse;
 
 // Set a given drive state
-void motorOut(int8_t driveState)
-{
+void motorOut(int8_t driveState) {
     // Lookup the output byte from the drive state.
     int8_t driveOut = driveTable[driveState & 0x07];
 
     // Turn off first
     if (~driveOut & 0x01) L1L = 0;
-    if (~driveOut & 0x02) L1H = motor_speed;
+    if (~driveOut & 0x02) L1H = pwm_duty_cycle;
     if (~driveOut & 0x04) L2L = 0;
-    if (~driveOut & 0x08) L2H = motor_speed;
+    if (~driveOut & 0x08) L2H = pwm_duty_cycle;
     if (~driveOut & 0x10) L3L = 0;
-    if (~driveOut & 0x20) L3H = motor_speed;
+    if (~driveOut & 0x20) L3H = pwm_duty_cycle;
 
     // Then turn on
-    if (driveOut & 0x01) L1L = motor_speed;
+    if (driveOut & 0x01) L1L = pwm_duty_cycle;
     if (driveOut & 0x02) L1H = 0;
-    if (driveOut & 0x04) L2L = motor_speed;
+    if (driveOut & 0x04) L2L = pwm_duty_cycle;
     if (driveOut & 0x08) L2H = 0;
-    if (driveOut & 0x10) L3L = motor_speed;
+    if (driveOut & 0x10) L3L = pwm_duty_cycle;
     if (driveOut & 0x20) L3H = 0;
 }
 
 // Convert photointerrupter inputs to a rotor state
-inline int8_t readRotorState()
-{
-    return stateMap[I1 + 2*I2 + 4*I3];
+inline int8_t readRotorState() {
+    return stateMap[I1 + 2 * I2 + 4 * I3];
 }
 
 // Basic synchronisation routine
-int8_t motorHome()
-{
+int8_t motorHome() {
     // Put the motor in drive state 0 and wait for it to stabilise
     motorOut(0);
     wait(1.0);
@@ -146,38 +146,30 @@ int8_t motorHome()
     return readRotorState();
 }
 
-void photointerrupt_ISR(void)
-{
+void photointerrupt_ISR(void) {
     int8_t intState;
     uint32_t current_time;
     intState = readRotorState();
-    motorOut((intState-orState+lead+6)%6); // +6 to make sure the remainder is positive
+    motorOut((intState - orState + lead + 6) % 6); // +6 to make sure the remainder is positive
 
     // only do when state is zero because states are not evenly spaced through the rotation
-    if (intState == 0)
-    {
+    if (intState == 0) {
         // calculate the speed based on the number of full revolutions
         current_time = speedTimer.read_us();
-        if (!timer_reset_coarse)
-        {
-            measured_speed_coarse = 1000000/((current_time - last_time_coarse));
+        if (!timer_reset_coarse) {
+            measured_speed_coarse = 1000000 / ((current_time - last_time_coarse));
             last_time_coarse = current_time;
-        }
-        else
-        {
+        } else {
             timer_reset_coarse = false;
             last_time_coarse = current_time;
         }
 
         // update the total distance travelled
-        if (!passedHome)
-        {
+        if (!passedHome) {
             // if the rotor hasn't passed through the zero state yet, the rotor position is the
             // distance from the initia state to the zero state and the total distance travelled so far
             total_distance_coarse += rotor_position;
-        }
-        else
-        {
+        } else {
             // if the rotor has passed through zero already then it has gone through a full revolution
             // and thus travelled 360 degrees
             total_distance_coarse += 360;
@@ -191,40 +183,34 @@ void photointerrupt_ISR(void)
     }
 }
 
-void incremental_ISR(void)
-{
+void incremental_ISR(void) {
     // assign arbitrary values to the 4 states of the incremental encoder
-    uint8_t state = (CHA*2 + CHB);
+    uint8_t state = (CHA * 2 + CHB);
     uint32_t current_time;
 
     // only do when state is zero because states are not evenly spaced
-    if (state == 0)
-    {
+    if (state == 0) {
         // update the number of increments since last speed measurement
         increments++;
         // update rotor position (one increment corresponds to 360/117 degrees)
-        rotor_position = rotor_position + 3.07692;
+        rotor_position = rotor_position + 3.07692f;
 
         // measure the speed based on the number of increments and time since the last speed measurement
         current_time = speedTimer.read_us();
-        if (!timer_reset_fine)
-        {
-            measured_speed_fine = increments*8547.0f/(current_time-last_time_fine);
+        if (!timer_reset_fine) {
+            measured_speed_fine = increments * 8547.0f / (current_time - last_time_fine);
             // reset increments
             increments = 0;
             // update last time speed was measured
             last_time_fine = current_time;
-        }
-        else
-        {
+        } else {
             timer_reset_fine = false;
             last_time_fine = current_time;
         }
     }
 }
 
-void set_PWM_period_us(int period_us)
-{
+void set_PWM_period_us(int period_us) {
     L1L.period_us(period_us);
     L1H.period_us(period_us);
     L2L.period_us(period_us);
@@ -233,8 +219,7 @@ void set_PWM_period_us(int period_us)
     L3H.period_us(period_us);
 }
 
-void setup(void)
-{
+void setup(void) {
     // Run the motor synchronisation
     orState = motorHome();
 
@@ -253,15 +238,11 @@ void setup(void)
     CHB.fall(incremental_ISR);
 
     // Set up PWM outputs
-    L1L.period_us(100);
-    L1H.period_us(100);
-    L2L.period_us(100);
-    L2H.period_us(100);
-    L3L.period_us(100);
-    L3H.period_us(100);
+    int pwm_period = 100;
+    set_PWM_period_us(pwm_period);
 
     // Set initial motor speed
-    motor_speed = 0.5f;
+    pwm_duty_cycle = 0.5f;
 
     // Start timer
     speedTimer.start();
@@ -271,114 +252,144 @@ void setup(void)
     rotor_position = 0.0f;
 }
 
-
-float IVelError,IPosError;
-
-//Controller
-void controller(float refRev=0, float refVel=0) {
-    float velPI = 0, posPID = 0;
-
-    if(refVel != 0) {
-        velPI = velocityController(refVel);
-    }
-
-    if(refRev != 0) {
-        posPID = positionController(refRev);
-    }
-
-    if(velPI != 0 && posPID != 0) {
-        if(velPI > posPID) {
-            motor_speed = posPID;
-        } else {
-            motor_speed = velPI;
-        }
-    } else if (velPI != 0) {
-        motor_speed = velPI;
-    } else {
-        motor_speed = posPID;
-    }
-
-}
+//integral error for the controllers
+volatile float IVelError, IPosError;
 
 float velocityController(float refVel) {
-    float K = 1, Kp = 90.3281, Ki = 0.2238, Kd = 0.7163;
-    float error = 0, Derror=0, pi, velPI_out;
-    float P = 0, I = 0, D = 0;
-    int pwmL = 0, pwmU = 1;
+    //Controller gains
+    float Kp = 3, Ki = 0;
+    //error: velocity error
+    //pi: controller output
+    //PI_out: output of the controller within the constraints
+    float error = 0, pi, PI_out;
+    //Init the proportional and integral terms
+    float P = 0, I = 0;
+    //Define lower and upper bounds of the output
+    float pwmL = 0, pwmU = 1;
 
+    //proportional
     error = refVel - measured_speed_fine;
     P = Kp * error;
 
+    //integral
     IVelError += error;
     I = Ki * IVelError;
 
-    pi = K * (P + I);
+    //pi
+    pi = P + I;
 
-    if(pid > pwmL && pid < pwmU) {
-        velPI_out = pid;
-    } else if(pid <= pwmL) {
-        velPI_out = pwmL;
-    } else if(pid >= pwmU) {
-        velPI_out = pwmU;
+    //if pi output is between the boundaries, pi is set as the output
+    if (pi > pwmL && pi < pwmU) {
+        PI_out = pi;
+    }
+        //pi less than 0, PI_out = 0, i.e. motor turned off
+    else if (pi <= pwmL) {
+        PI_out = pwmL;
+    }
+        //pi above 1, PI_out = 1, i.e. maximum input to motor
+    else if (pi >= pwmU) {
+        PI_out = pwmU;
     }
 
-    return velPI_out;
+    return PI_out;
 }
 
 float positionController(float refRev) {
-    float K = 1, Kp = 90.3281, Ki = 85.2238, Kd = 17.7163;
-    float error = 0, Derror=0, pid, posPID_out;
+    //Controller gains
+    float K = 1, Kp = 1.3281, Ki = 0.2238, Kd = 1.5;
+    //error: distance error
+    //pid: controller output
+    //PID_out: output of the controller within the constraints
+    float error = 0, pid, PID_out;
+    //Init proportional–integral–derivative terms
     float P = 0, I = 0, D = 0;
-    int pwmL = 0, pwmU = 1;
+    //Define lower and upper bounds of the output
+    float pwmL = 0, pwmU = 1;
 
+    //proportional
     error = (refRev * 360) - total_distance_fine;
     P = Kp * error;
 
+    //integral
     IPosError += error;
     I = Ki * IPosError;
 
-    Derror = measured_speed_fine;
-    D = Kd * Derror;
+    //derivative
+    D = Kd * measured_speed_fine;
 
+    //PID
     pid = K * (P + I + D);
-    if(pid > pwmL && pid < pwmU) {
-        posPID_out = pid;
-    } else if(pid <= pwmL) {
-        posPID_out = pwmL;
-    } else if(pid >= pwmU) {
-        posPID_out = pwmU;
+
+    //if pid output is between the boundaries, pi is set as the output
+    if (pid > pwmL && pid < pwmU) {
+        PID_out = pid;
     }
-    return posPID_out;
+        //pi less than 0, PI_out = 0, i.e. motor turned off
+    else if (pid <= pwmL) {
+        PID_out = pwmL;
+    }
+        //pi above 1, PI_out = 1, i.e. maximum input to motor
+    else if (pid >= pwmU) {
+        PID_out = pwmU;
+    }
+    return PID_out;
 }
 
 
 
+//Controller
+void controller(float refRev = 0, float refVel = 0) {
+    //init variables for controller values
+    float velocityControl = 0, positionControl = 0;
 
-float* freqPtr;
-int* durationPtr;
+    //Check if a velocity controller is needed, i.e. user want a desired speed
+    if (refVel != 0) {
+        velocityControl = velocityController(refVel);
+    }
 
-void playTune(int toneSum)
-{
-    for (int i = 0; i < toneSum; i++)
-    {
-        printf("play %f Hz for %d us.\n", freqPtr[i], durationPtr[i]*100);
-        set_PWM_period_us(1000000/freqPtr[i]);
-        wait_ms(durationPtr[i]*150);
+    //Check if a position controller is needed
+    if (refRev != 0) {
+        positionControl = positionController(refRev);
+    }
+
+    //Check if both controllers are active
+    if (velocityControl != 0 && positionControl != 0) {
+        //sets the output to the motor to the smallest controller output
+        if (velocityControl > positionControl) {
+            pwm_duty_cycle = positionControl;
+        } else {
+            pwm_duty_cycle = velocityControl;
+        }
+    }
+        //If not both controllers are active, set motor output to contoller output
+    else if (velocityControl != 0) {
+        pwm_duty_cycle = velocityControl;
+    } else {
+        pwm_duty_cycle = positionControl;
+    }
+
+}
+
+float *freqPtr;
+int *durationPtr;
+
+void playTune(int toneSum) {
+    for (int i = 0; i < toneSum; i++) {
+        printf("play %f Hz for %d us.\n", freqPtr[i], durationPtr[i] * 100);
+        set_PWM_period_us(1000000 / freqPtr[i]);
+        wait_ms(durationPtr[i] * 150);
         set_PWM_period_us(50);
     }
 }
 
-void readRegex()
-{
+void readRegex() {
     char regex[64];
     //char regex[64];
     int i = 0;
     char c;
     int toneSum = 0;
-    if (pc.readable())
-    {
-        while (pc.readable())
-        {
+    if (pc.readable()) {
+        while (pc.readable()) {
             c = pc.getc();
             //               pc.putc(c+1);    //debug
             regex[i] = c;
@@ -388,14 +399,14 @@ void readRegex()
         printf("\nRegex=%s, ", regex);
         interpreteRegex(regex, i);
 
-        if(getMotorCommands(&revFloat, &velFloat))
-        {
-            total_distance = 0;
-            Ierror = 0;
+        if (getMotorCommands(&revFloat, &velFloat)) {
+            total_distance_fine = 0;
+            IVelError = 0;
+            IPosError = 0;
             printf("TODO: execute motor command, rev=%f, vel=%f\n", revFloat, velFloat);
-        }else{
+        } else {
             toneSum = getTune(&freqPtr, &durationPtr);
-            if (toneSum){
+            if (toneSum) {
                 playTune(toneSum);
             }
         }
@@ -403,33 +414,73 @@ void readRegex()
     }
 }
 
-void test_thread() {
-    printf("Rotor speed: %f\n",measured_speed_fine);
-    printf("Rotor position: %f\n",rotor_position);
-    printf("Control out: %f\n", motor_speed);
-    printf("total distance: %f\n", total_distance / 360);
-    wait(1);
+void regexThread() {
+    while (true) {
+        readRegex();
+        Thread::wait(1000);
+    }
+}
+
+DigitalOut myLED(LED1);
+
+void printInfoThread() {
+    while (true) {
+        printf("Rotor speed: %f\n", measured_speed_fine);
+        printf("Rotor position: %f\n", rotor_position);
+        printf("Control out: %f\n", pwm_duty_cycle);
+        printf("total distance: %f\n", total_distance_fine / 360);
+        //printf("Rotor speed: %3.2f, Rotor position: %3.2f, PWM: %3.2f, total distance: %5.2f\n",measured_speed_fine, rotor_position, pwm_duty_cycle, total_distance_fine / 360);
+        //Thread::wait(1500);
+    }
+}
+
+// reset the timer every 20 minutes to prevent it from overflowing
+void resetTimer() {
+    if (speedTimer.read_us() > 1200000000) {
+        speedTimer.reset();
+        timer_reset_fine = true;
+        timer_reset_coarse = true;
+    }
 }
 
 
-int main(void)
-{
+void controlThread() {
+    while (true) {
+        //controller(revFloat, velFloat);
+        resetTimer();
+        Thread::wait(1000);
+    }
+}
+
+void regexThread() {
+    printf("regex");
+    Thread::wait(2000);
+}
+
+
+
+int main(void) {
+    Thread t1;
+    Thread t2;
+    Thread t3;
+
     setup();
     pc.baud(115200);
-    while(1)
-    {
-        readRegex();
-        test_thread();
 
-        controller(revFloat,velFloat);
+    //t1.set_priority(osPriorityLow);
+    osStatus err = t1.start(&regexThread);
 
-
-        // reset the timer every 20 minutes to prevent it from overflowing
-        if (speedTimer.read_us() > 1200000000)
-        {
-            speedTimer.reset();
-            timer_reset_fine = true;
-            timer_reset_coarse = true;
-        }
+    if(err)  {
+        printf("Problem");
     }
+
+    //printInfoThread();
+    //printf("stack size: %d\n", t1.stack_size());
+
+    //t2.set_priority(osPriorityHigh);
+    //t2.start(controlThread);
+
+    //t3.set_priority(osPriorityLow);
+    //t3.start(regexThread);
+
 }
