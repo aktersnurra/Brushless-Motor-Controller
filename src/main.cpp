@@ -1,7 +1,8 @@
 #include "mbed.h"
 #include "rtos.h"
-#include "BufferedSerial.h"
+//#include <string>
 #include "interpreteRegex.h"
+#include <cstring>
 
 // Photointerrupter input pins
 #define I1pin D2
@@ -95,7 +96,8 @@ volatile float measured_speed_coarse;
 
 // Initialise the serial port
 // Serial pc(SERIAL_TX, SERIAL_RX, 115200);
-BufferedSerial pc(USBTX, USBRX);
+//BufferedSerial pc(USBTX, USBRX);
+RawSerial pc(USBTX, USBRX);
 
 // bool to determine if the rotor has passed through the zero state yet
 volatile bool passedHome = false;
@@ -169,6 +171,7 @@ void photointerrupt_ISR(void) {
             // if the rotor hasn't passed through the zero state yet, the rotor position is the
             // distance from the initia state to the zero state and the total distance travelled so far
             total_distance_coarse += rotor_position;
+            passedHome = true;
         } else {
             // if the rotor has passed through zero already then it has gone through a full revolution
             // and thus travelled 360 degrees
@@ -242,7 +245,7 @@ void setup(void) {
     set_PWM_period_us(pwm_period);
 
     // Set initial motor speed
-    pwm_duty_cycle = 0.5f;
+    pwm_duty_cycle = 0.9f;
 
     // Start timer
     speedTimer.start();
@@ -257,7 +260,7 @@ volatile float IVelError, IPosError;
 
 float velocityController(float refVel) {
     //Controller gains
-    float Kp = 3, Ki = 0;
+    float Kp = 10, Ki = 0.001;
     //error: velocity error
     //pi: controller output
     //PI_out: output of the controller within the constraints
@@ -296,7 +299,7 @@ float velocityController(float refVel) {
 
 float positionController(float refRev) {
     //Controller gains
-    float K = 1, Kp = 1.3281, Ki = 0.2238, Kd = 1.5;
+    float K = 1, Kp = 10, Ki = 0.001, Kd = 10;
     //error: distance error
     //pid: controller output
     //PID_out: output of the controller within the constraints
@@ -375,7 +378,9 @@ int *durationPtr;
 
 void playTune(int toneSum) {
     for (int i = 0; i < toneSum; i++) {
-        printf("play %f Hz for %d us.\n", freqPtr[i], durationPtr[i] * 100);
+        //string tuneOut("play %f Hz for %d us.\n", freqPtr[i], durationPtr[i] * 100);
+        char tuneOut[] = "Playing";
+        pc.puts(tuneOut);
         set_PWM_period_us(1000000 / freqPtr[i]);
         wait_ms(durationPtr[i] * 150);
         set_PWM_period_us(50);
@@ -384,26 +389,28 @@ void playTune(int toneSum) {
 
 void readRegex() {
     char regex[64];
-    //char regex[64];
     int i = 0;
     char c;
     int toneSum = 0;
     if (pc.readable()) {
         while (pc.readable()) {
             c = pc.getc();
-            //               pc.putc(c+1);    //debug
             regex[i] = c;
             i++;
         }
         regex[i] = '\0';
-        printf("\nRegex=%s, ", regex);
+        //string regexCmd("\nRegex=%s, ", regex);
+        char regexCmd[] = "Regex";
+        pc.puts(regexCmd);
         interpreteRegex(regex, i);
 
         if (getMotorCommands(&revFloat, &velFloat)) {
             total_distance_fine = 0;
             IVelError = 0;
             IPosError = 0;
-            printf("TODO: execute motor command, rev=%f, vel=%f\n", revFloat, velFloat);
+            //string strcmd("TODO: execute motor command, rev=%f, vel=%f\n", revFloat, velFloat);
+            char strcmd[] = "TODO";
+            pc.puts(strcmd);
         } else {
             toneSum = getTune(&freqPtr, &durationPtr);
             if (toneSum) {
@@ -414,23 +421,16 @@ void readRegex() {
     }
 }
 
-void regexThread() {
-    while (true) {
-        readRegex();
-        Thread::wait(1000);
-    }
-}
-
-DigitalOut myLED(LED1);
-
 void printInfoThread() {
     while (true) {
-        printf("Rotor speed: %f\n", measured_speed_fine);
-        printf("Rotor position: %f\n", rotor_position);
-        printf("Control out: %f\n", pwm_duty_cycle);
-        printf("total distance: %f\n", total_distance_fine / 360);
-        //printf("Rotor speed: %3.2f, Rotor position: %3.2f, PWM: %3.2f, total distance: %5.2f\n",measured_speed_fine, rotor_position, pwm_duty_cycle, total_distance_fine / 360);
-        //Thread::wait(1500);
+        //string strOut1("Rotor speed: %f, Rotor position: %f", measured_speed_fine,rotor_position);
+        //string strOut2("PWM: %f, total distance: %f\n", pwm_duty_cycle, total_distance_fine / 360);
+        //string strOut = strOut1 + strOut2;
+        //pc.puts(strOut.c_str());
+        //char strOut[] = sprintf("Rotor speed: %f, Rotor position: %f", measured_speed_fine,rotor_position);
+        //pc.puts(strOut.c_str());
+        pc.puts(strOut);
+        Thread::wait(3000);
     }
 }
 
@@ -446,41 +446,41 @@ void resetTimer() {
 
 void controlThread() {
     while (true) {
-        //controller(revFloat, velFloat);
-        resetTimer();
-        Thread::wait(1000);
+        controller(revFloat, velFloat);
+        Thread::wait(1);
     }
 }
 
 void regexThread() {
-    printf("regex");
-    Thread::wait(2000);
+    while(true) {
+        readRegex();
+        resetTimer();
+        Thread::wait(2000);
+    }
 }
 
 
 
 int main(void) {
-    Thread t1;
-    Thread t2;
-    Thread t3;
+    Thread t1(osPriorityLow, 512);
+    Thread t2(osPriorityHigh, 512);
+    Thread t3(osPriorityLow, 512);
 
     setup();
     pc.baud(115200);
+    velFloat = 10;
+    revFloat = 10;
+    t1.start(printInfoThread);
+    t3.start(regexThread);
+    t2.max_stack();
+    t2.start(controlThread);
 
-    //t1.set_priority(osPriorityLow);
-    osStatus err = t1.start(&regexThread);
-
-    if(err)  {
-        printf("Problem");
+    while(true) {
+        t1.free_stack();
+        t3.free_stack();
+        t2.free_stack();
+        Thread::wait(1000);
     }
 
-    //printInfoThread();
-    //printf("stack size: %d\n", t1.stack_size());
-
-    //t2.set_priority(osPriorityHigh);
-    //t2.start(controlThread);
-
-    //t3.set_priority(osPriorityLow);
-    //t3.start(regexThread);
 
 }
