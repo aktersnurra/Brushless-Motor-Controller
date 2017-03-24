@@ -1,8 +1,9 @@
 #include "mbed.h"
 #include "rtos.h"
-//#include <string>
+#include <string>
 #include "interpreteRegex.h"
-#include <cstring>
+#include "BufferedSerial.h"
+//#include <cstring>
 
 // Photointerrupter input pins
 #define I1pin D2
@@ -44,15 +45,12 @@ const int8_t stateMap[] = {0x07, 0x05, 0x03, 0x04, 0x01, 0x00, 0x02, 0x07};
 // const int8_t stateMap[] = {0x07,0x01,0x03,0x02,0x05,0x00,0x04,0x07}; //Alternative if phase order of input or drive is reversed
 
 // Phase lead to make motor spin
-const int8_t lead = -2;  //2 for forwards, -2 for backwards
+const int8_t lead = 2;  //2 for forwards, -2 for backwards
 
 //Init number revolutions that the user wants the motor to spin for
 extern float revFloat;
 //Init the velocity that the user wants the motor to spin at
 extern float velFloat;
-
-//Init Thread for threading :)
-Thread thread;
 
 // motor speed
 volatile float pwm_duty_cycle = 0;
@@ -95,9 +93,7 @@ volatile float measured_speed_fine;
 volatile float measured_speed_coarse;
 
 // Initialise the serial port
-// Serial pc(SERIAL_TX, SERIAL_RX, 115200);
-//BufferedSerial pc(USBTX, USBRX);
-RawSerial pc(USBTX, USBRX);
+BufferedSerial pc(USBTX, USBRX);
 
 // bool to determine if the rotor has passed through the zero state yet
 volatile bool passedHome = false;
@@ -146,6 +142,15 @@ int8_t motorHome() {
 
     // Get the rotor state
     return readRotorState();
+}
+
+void startMotor()
+{
+    int8_t intState;
+    intState = readRotorState();
+    {
+        motorOut((intState - orState + lead + 6) % 6); // +6 to make sure the remainder is positive
+    }
 }
 
 void photointerrupt_ISR(void) {
@@ -197,6 +202,9 @@ void incremental_ISR(void) {
         increments++;
         // update rotor position (one increment corresponds to 360/117 degrees)
         rotor_position = rotor_position + 3.07692f;
+        
+        // update total_distance_fine
+        total_distance_fine += 3.07692f;
 
         // measure the speed based on the number of increments and time since the last speed measurement
         current_time = speedTimer.read_us();
@@ -222,38 +230,8 @@ void set_PWM_period_us(int period_us) {
     L3H.period_us(period_us);
 }
 
-void setup(void) {
-    // Run the motor synchronisation
-    orState = motorHome();
 
-    // Set up interrupts for absolute encoder
-    I1.rise(&photointerrupt_ISR);
-    I1.fall(&photointerrupt_ISR);
-    I2.rise(&photointerrupt_ISR);
-    I2.fall(&photointerrupt_ISR);
-    I3.rise(&photointerrupt_ISR);
-    I3.fall(&photointerrupt_ISR);
 
-    // Set up interrupts for incremental encoder
-    CHA.rise(incremental_ISR);
-    CHA.fall(incremental_ISR);
-    CHB.rise(incremental_ISR);
-    CHB.fall(incremental_ISR);
-
-    // Set up PWM outputs
-    int pwm_period = 100;
-    set_PWM_period_us(pwm_period);
-
-    // Set initial motor speed
-    pwm_duty_cycle = 0.9f;
-
-    // Start timer
-    speedTimer.start();
-    last_time_fine = 0;
-
-    increments = 0;
-    rotor_position = 0.0f;
-}
 
 //integral error for the controllers
 volatile float IVelError, IPosError;
@@ -299,7 +277,7 @@ float velocityController(float refVel) {
 
 float positionController(float refRev) {
     //Controller gains
-    float K = 1, Kp = 10, Ki = 0.001, Kd = 10;
+    float K = 0.00005, Kp = 1.7, Ki = 0, Kd = 1.5;
     //error: distance error
     //pid: controller output
     //PID_out: output of the controller within the constraints
@@ -322,6 +300,7 @@ float positionController(float refRev) {
 
     //PID
     pid = K * (P + I + D);
+    
 
     //if pid output is between the boundaries, pi is set as the output
     if (pid > pwmL && pid < pwmU) {
@@ -356,7 +335,7 @@ void controller(float refRev = 0, float refVel = 0) {
     }
 
     //Check if both controllers are active
-    if (velocityControl != 0 && positionControl != 0) {
+    if (refRev != 0 & refVel != 0) {
         //sets the output to the motor to the smallest controller output
         if (velocityControl > positionControl) {
             pwm_duty_cycle = positionControl;
@@ -365,7 +344,7 @@ void controller(float refRev = 0, float refVel = 0) {
         }
     }
         //If not both controllers are active, set motor output to contoller output
-    else if (velocityControl != 0) {
+    else if (refVel != 0) {
         pwm_duty_cycle = velocityControl;
     } else {
         pwm_duty_cycle = positionControl;
@@ -378,9 +357,8 @@ int *durationPtr;
 
 void playTune(int toneSum) {
     for (int i = 0; i < toneSum; i++) {
-        //string tuneOut("play %f Hz for %d us.\n", freqPtr[i], durationPtr[i] * 100);
-        char tuneOut[] = "Playing";
-        pc.puts(tuneOut);
+        pc.printf("play %f Hz for %d us.\n", freqPtr[i], durationPtr[i] * 100);
+        pwm_duty_cycle = 1;
         set_PWM_period_us(1000000 / freqPtr[i]);
         wait_ms(durationPtr[i] * 150);
         set_PWM_period_us(50);
@@ -399,18 +377,17 @@ void readRegex() {
             i++;
         }
         regex[i] = '\0';
-        //string regexCmd("\nRegex=%s, ", regex);
-        char regexCmd[] = "Regex";
-        pc.puts(regexCmd);
+        pc.printf("\nRegex=%s, ", regex);
         interpreteRegex(regex, i);
 
         if (getMotorCommands(&revFloat, &velFloat)) {
             total_distance_fine = 0;
+            total_distance_coarse = 0;
+            passedHome = false;
             IVelError = 0;
             IPosError = 0;
-            //string strcmd("TODO: execute motor command, rev=%f, vel=%f\n", revFloat, velFloat);
-            char strcmd[] = "TODO";
-            pc.puts(strcmd);
+            pc.printf("TODO: execute motor command, rev=%f, vel=%f\n\r", revFloat, velFloat);
+            startMotor();
         } else {
             toneSum = getTune(&freqPtr, &durationPtr);
             if (toneSum) {
@@ -422,16 +399,10 @@ void readRegex() {
 }
 
 void printInfoThread() {
-    while (true) {
-        //string strOut1("Rotor speed: %f, Rotor position: %f", measured_speed_fine,rotor_position);
-        //string strOut2("PWM: %f, total distance: %f\n", pwm_duty_cycle, total_distance_fine / 360);
-        //string strOut = strOut1 + strOut2;
-        //pc.puts(strOut.c_str());
-        //char strOut[] = sprintf("Rotor speed: %f, Rotor position: %f", measured_speed_fine,rotor_position);
-        //pc.puts(strOut.c_str());
-        pc.puts(strOut);
-        Thread::wait(3000);
-    }
+    //while (true) {
+        //pc.printf("Rotor speed: %f, Rotor position: %f, PWM: %f, total distance: %f\n\r", measured_speed_fine,rotor_position, pwm_duty_cycle, total_distance_fine / 360);
+        //Thread::wait(3000);
+    //}
 }
 
 // reset the timer every 20 minutes to prevent it from overflowing
@@ -445,9 +416,10 @@ void resetTimer() {
 
 
 void controlThread() {
+    
     while (true) {
         controller(revFloat, velFloat);
-        Thread::wait(1);
+        Thread::wait(10);
     }
 }
 
@@ -460,6 +432,39 @@ void regexThread() {
 }
 
 
+void setup(void) {
+    // Run the motor synchronisation
+    orState = motorHome();
+
+    // Set up interrupts for absolute encoder
+    I1.rise(&photointerrupt_ISR);
+    I1.fall(&photointerrupt_ISR);
+    I2.rise(&photointerrupt_ISR);
+    I2.fall(&photointerrupt_ISR);
+    I3.rise(&photointerrupt_ISR);
+    I3.fall(&photointerrupt_ISR);
+
+    // Set up interrupts for incremental encoder
+    CHA.rise(incremental_ISR);
+    CHA.fall(incremental_ISR);
+    CHB.rise(incremental_ISR);
+    CHB.fall(incremental_ISR);
+
+    // Set up PWM outputs
+    int pwm_period = 100;
+    set_PWM_period_us(pwm_period);
+
+    // Set initial motor speed
+    pwm_duty_cycle = 0.9f;
+
+    // Start timer
+    speedTimer.start();
+    last_time_fine = 0;
+
+    increments = 0;
+    rotor_position = 0.0f;
+}
+
 
 int main(void) {
     Thread t1(osPriorityLow, 512);
@@ -468,18 +473,21 @@ int main(void) {
 
     setup();
     pc.baud(115200);
-    velFloat = 10;
-    revFloat = 10;
-    t1.start(printInfoThread);
-    t3.start(regexThread);
+    velFloat = 0;
+    revFloat = 0;
+    //t1.start(printInfoThread);
+    //t3.start(regexThread);
     t2.max_stack();
     t2.start(controlThread);
 
     while(true) {
-        t1.free_stack();
-        t3.free_stack();
+        //t1.free_stack();
+        //t3.free_stack();
         t2.free_stack();
         Thread::wait(1000);
+        pc.printf("Rotor speed: %f, Rotor position: %f, PWM: %f, total distance: %f\n\r", measured_speed_fine,rotor_position, pwm_duty_cycle, total_distance_fine / 360);
+        pc.printf("velFloat: %f, revFloat: %f\n\r", velFloat, revFloat);
+        readRegex();    
     }
 
 
